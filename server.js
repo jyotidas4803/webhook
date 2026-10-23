@@ -3,36 +3,46 @@ const express = require("express");
 const axios = require("axios");
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
 const PORT = process.env.PORT || 3000;
 
-// Same event dobara aaye toh dusri baar process na ho
+// Same user dobara process na ho
 const processed = new Set();
 
-// Health check - browser mein kholke dekh sakti ho server chal raha hai ya nahi
-app.get("/", (req, res) => res.send("Webhook server chal raha hai"));
+app.get("/", (req, res) => res.send("Webhook server is runnnig"));
 
 app.post("/webhook", async (req, res) => {
-  // Step 1: simple security - URL mein ?token=XXXX hona chahiye
+  // Step 1: token check
   if (req.query.token !== process.env.WEBHOOK_TOKEN) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  // Step 2: payload dekho (pehli baar yahi log dekhna, Sprinklr kya bhej raha hai)
-  const payload = req.body;
-  console.log("Webhook aaya:", JSON.stringify(payload, null, 2));
+  const body = req.body || {};
 
-  // Step 3: Sprinklr ko turant 200 bhej do, warna wo retry karega
+  // Step 2: Sprinklr turant 200 chahta hai (10 second ke andar)
   res.status(200).json({ received: true });
 
-  // Step 4: ab dusra API call
+  // Step 3: verification call khaali {} bhejta hai, usko ignore karo
+  if (!body.type) {
+    console.log("Verification / khaali request, skip");
+    return;
+  }
+  console.log("Event aaya:", body.type, "| event id:", body.id);
+
+  // Step 4: sirf user.created event process karo
+  if (body.type !== "user.created") {
+    console.log("User create event nahi hai, skip");
+    return;
+  }
+
   try {
-    // NOTE: payload ke field names Sprinklr ke actual event ke hisaab se badalna
-    const userId = payload.id || payload.userId || payload.email;
+    // Asli user ka data body.payload ke andar hota hai
+    const user = body.payload || {};
+    const userId = user.id;
 
     if (!userId) {
-      console.log("User id nahi mila payload mein, skip kar rahi hu");
+      console.log("payload.id absent, skip");
       return;
     }
     if (processed.has(userId)) {
@@ -41,13 +51,16 @@ app.post("/webhook", async (req, res) => {
     }
     processed.add(userId);
 
-    // Yahan apna dusra API call likho
+    console.log("User:", userId, user.userName, user.name?.givenName, user.name?.familyName);
+
+    // Yahan dusra API call. Body ko apne target API ke format ke hisaab se badalna
     const response = await axios.post(
       process.env.TARGET_API_URL,
       {
-        // Jo user data dusre API ko chahiye wo yahan map karo
-        name: payload.name,
-        email: payload.email,
+        userName: user.userName,
+        givenName: user.name?.givenName,
+        familyName: user.name?.familyName,
+        active: user.active,
       },
       {
         headers: {
@@ -59,7 +72,7 @@ app.post("/webhook", async (req, res) => {
 
     console.log("Dusra API call success:", response.status);
   } catch (err) {
-    console.error("Dusra API call fail:", err.response?.data || err.message);
+    console.error("Dusra API call fail:", err.response?.status, err.response?.data || err.message);
   }
 });
 
