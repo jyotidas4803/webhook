@@ -39,9 +39,11 @@ async function getSprinklrToken(force = false) {
       new URLSearchParams(creds).toString(),
       {
         headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-        },
+  Authorization: `Bearer ${await getSprinklrToken(force)}`,
+  Key: process.env.SPRINKLR_API_KEY,
+  Accept: "application/scim+json",
+  "Content-Type": "application/scim+json",
+},
       }
     );
   } catch (err) {
