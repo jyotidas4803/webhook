@@ -11,6 +11,80 @@ const PORT = process.env.PORT || 3000;
 // NOTE: Render restart par ye reset ho jata hai
 const processed = new Set();
 
+// ---------------------------------------------------------------
+// Sprinklr access token: server khud banata hai (client_credentials)
+// Token ~8 ghante chalta hai, isliye cache karke expire se pehle naya leta hai
+// ---------------------------------------------------------------
+let tokenCache = { token: null, expiresAt: 0 };
+
+async function getSprinklrToken(force = false) {
+  // Agar client_secret nahi diya, toh haath se daala hua token use karo
+  if (!process.env.SPRINKLR_CLIENT_SECRET) return process.env.SPRINKLR_ACCESS_TOKEN;
+
+  if (!force && tokenCache.token && Date.now() < tokenCache.expiresAt) {
+    return tokenCache.token;
+  }
+
+  const creds = {
+    client_id: process.env.SPRINKLR_CLIENT_ID || process.env.SPRINKLR_API_KEY,
+    client_secret: process.env.SPRINKLR_CLIENT_SECRET,
+    grant_type: "client_credentials",
+  };
+
+  let resp;
+  try {
+    // Pehle form body ke saath try karo
+    resp = await axios.post(
+      process.env.SPRINKLR_TOKEN_URL,
+      new URLSearchParams(creds).toString(),
+      {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json",
+        },
+      }
+    );
+  } catch (err) {
+    // Nahi chala toh query params ke saath try karo
+    if (err.response && [400, 415].includes(err.response.status)) {
+      resp = await axios.post(process.env.SPRINKLR_TOKEN_URL, null, {
+        params: creds,
+        headers: { Accept: "application/json" },
+      });
+    } else {
+      throw err;
+    }
+  }
+
+  const { access_token, expires_in } = resp.data;
+  const ttl = Math.max(Number(expires_in || 3600) - 300, 60); // 5 minute pehle refresh
+  tokenCache = { token: access_token, expiresAt: Date.now() + ttl * 1000 };
+  console.log("Naya Sprinklr token liya, expires_in:", expires_in);
+  return access_token;
+}
+
+// Users ki list lao. 401 aaye toh naya token lekar ek baar dobara try karo
+async function fetchSprinklrUsers() {
+  const call = async (force) =>
+    axios.get(process.env.SPRINKLR_SCIM_URL, {
+      headers: {
+        Authorization: `Bearer ${await getSprinklrToken(force)}`,
+        Key: process.env.SPRINKLR_API_KEY,
+        Accept: "application/json",
+      },
+    });
+
+  try {
+    return await call(false);
+  } catch (err) {
+    if (err.response?.status === 401 && process.env.SPRINKLR_CLIENT_SECRET) {
+      console.log("401, fetching the new user");
+      return await call(true);
+    }
+    throw err;
+  }
+}
+
 app.get("/", (req, res) => res.send("Webhook server is runnnig"));
 
 // ---------------------------------------------------------------
@@ -75,7 +149,7 @@ app.post("/webhook", async (req, res) => {
     const p = body.payload || {};
     if (!p.id) return;
     if (processed.has(p.id)) {
-      console.log("this user is already processed:", p.id);
+      console.log("user already processed:", p.id);
       return;
     }
     processed.add(p.id);
@@ -88,9 +162,9 @@ app.post("/webhook", async (req, res) => {
       active: p.active,
     };
     const r = await notifySecondApi(user, "webhook");
-    console.log("Second API call success (webhook):", r.status, user.userName);
+    console.log("second API call success (webhook):", r.status, user.userName);
   } catch (err) {
-    console.error("Second API call fail (webhook):", err.response?.status, err.response?.data || err.message);
+    console.error("second API call fail (webhook):", err.response?.status, err.response?.data || err.message);
   }
 });
 
@@ -109,17 +183,11 @@ function parseSprinklrTime(s) {
 }
 
 async function pollNewUsers() {
-  if (polling) return { skipped: "last poll is still runnig" };
+  if (polling) return { skipped: "last poll is running" };
   polling = true;
 
   try {
-    const resp = await axios.get(process.env.SPRINKLR_SCIM_URL, {
-      headers: {
-        Authorization: `Bearer ${process.env.SPRINKLR_ACCESS_TOKEN}`,
-        Key: process.env.SPRINKLR_API_KEY,
-        Accept: "application/json",
-      },
-    });
+    const resp = await fetchSprinklrUsers();
 
     const data = resp.data;
     const list = Array.isArray(data)
@@ -127,7 +195,7 @@ async function pollNewUsers() {
       : data.Resources || data.resources || data.users || data.data || [];
 
     if (!list.length) {
-      console.log("Poll: list is empty or something is different. Response keys:", Object.keys(data || {}));
+      console.log("Poll: list is empty or the format is different. Response keys:", Object.keys(data || {}));
     }
 
     const cutoff = Date.now() - WINDOW_MIN * 60 * 1000;
@@ -136,7 +204,7 @@ async function pollNewUsers() {
       return t && t >= cutoff && !processed.has(u.id);
     });
 
-    console.log(`Poll: ${list.length} checked users, ${fresh.length} users found`);
+    console.log(`Poll: ${list.length} users check, ${fresh.length} found new`);
 
     for (const u of fresh) {
       processed.add(u.id);
@@ -149,9 +217,9 @@ async function pollNewUsers() {
       };
       try {
         const r = await notifySecondApi(user, "polling");
-        console.log("second API call success (poll):", r.status, user.userName);
+        console.log("Second API call success (poll):", r.status, user.userName);
       } catch (err) {
-        console.error("second API call fail (poll):", err.response?.status, err.response?.data || err.message);
+        console.error("Second API call fail (poll):", err.response?.status, err.response?.data || err.message);
       }
     }
 
