@@ -100,36 +100,87 @@ async function getSprinklrToken(force = false) {
 }
 
 // -------------------------------
-// FETCH SPRINKLR USERS
+// FETCH ALL SPRINKLR USERS
+// AUTOMATIC PAGINATION
 // -------------------------------
 
 async function fetchSprinklrUsers() {
-  const call = async (force) => {
-    const token = await getSprinklrToken(force);
+  const allUsers = [];
+  const pageSize = 100;
 
-    return axios.get(process.env.SPRINKLR_SCIM_URL, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Key: process.env.SPRINKLR_API_KEY,
-        Accept: "application/scim+json",
-        "Content-Type": "application/scim+json",
-      },
-    });
-  };
+  let startIndex = 1;
+  let totalResults = Infinity;
 
-  try {
-    return await call(false);
-  } catch (err) {
-    if (
-      err.response?.status === 401 &&
-      process.env.SPRINKLR_CLIENT_SECRET
-    ) {
-      console.log("Token expired. Refreshing...");
-      return await call(true);
+  while (startIndex <= totalResults) {
+    const call = async (force) => {
+      const token = await getSprinklrToken(force);
+
+      return axios.get(process.env.SPRINKLR_SCIM_URL, {
+        params: {
+          startIndex,
+          count: pageSize,
+        },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Key: process.env.SPRINKLR_API_KEY,
+          Accept: "application/scim+json",
+          "Content-Type": "application/scim+json",
+        },
+      });
+    };
+
+    let response;
+
+    try {
+      response = await call(false);
+    } catch (err) {
+      if (
+        err.response?.status === 401 &&
+        process.env.SPRINKLR_CLIENT_SECRET
+      ) {
+        console.log("Token expired. Refreshing...");
+        response = await call(true);
+      } else {
+        throw err;
+      }
     }
 
-    throw err;
+    const data = response.data;
+    const users = data?.Resources || [];
+
+    if (!Array.isArray(users)) {
+      throw new Error("Invalid SCIM Resources format");
+    }
+
+    totalResults = Number(data.totalResults);
+
+    if (!Number.isFinite(totalResults)) {
+      throw new Error("Invalid SCIM totalResults");
+    }
+
+    allUsers.push(...users);
+
+    console.log(
+      `Fetched page starting at ${startIndex}: ${users.length} users`
+    );
+
+    if (users.length === 0) {
+      if (startIndex <= totalResults) {
+        throw new Error("SCIM returned an empty page before completion");
+      }
+      break;
+    }
+
+    startIndex += users.length;
   }
+
+  console.log(`Total users fetched: ${allUsers.length}`);
+
+  return {
+    data: {
+      Resources: allUsers,
+    },
+  };
 }
 
 // -------------------------------
@@ -273,13 +324,10 @@ function parseSprinklrTime(value) {
 
   const str = String(value).trim();
 
-  // Supports:
-  // 2026-10-26 06:29:58
-  // 2026-10-26T06:29:58Z
-  // ISO strings with timezone offsets
-  const normalized = str.includes("T")
-    ? str
-    : str.replace(" ", "T") + "Z";
+  const normalized =
+    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(str)
+      ? str.replace(" ", "T") + "Z"
+      : str;
 
   const timestamp = new Date(normalized).getTime();
 
@@ -334,6 +382,7 @@ async function pollNewUsers() {
       return (
         created !== null &&
         created >= cutoff &&
+        created <= Date.now() &&
         !processed.has(String(u.id))
       );
     });
