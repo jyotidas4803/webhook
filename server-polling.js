@@ -85,7 +85,7 @@ async function fetchSprinklrUsers() {
   }
 }
 
-app.get("/", (req, res) => res.send("Webhook server is runnnig"));
+app.get("/", (req, res) => res.send("Webhook server is runnnig.."));
 
 // ---------------------------------------------------------------
 // Dusra step: user ki details Telegram (ya kisi API) ko bhejna
