@@ -21,9 +21,9 @@ let tokenCache = {
   expiresAt: 0,
 };
 
-async function getSprinklrToken(force = false) {
-  if (!process.env.SPRINKLR_CLIENT_SECRET) {
-    if (!process.env.SPRINKLR_ACCESS_TOKEN) {
+async function getSprinklrToken(force = false) {          //the function tries to reuse a valid token, But when we pass true, it skips the cached token and requests a fresh one
+  if (!process.env.SPRINKLR_CLIENT_SECRET) {            //checks whether the client secret is missing or otherwise falsy
+    if (!process.env.SPRINKLR_ACCESS_TOKEN) {           //If no client secret is available, the code checks whether an existing access token is configured.
       throw new Error("Sprinklr token not configured");
     }
     return process.env.SPRINKLR_ACCESS_TOKEN;
