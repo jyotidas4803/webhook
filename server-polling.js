@@ -1,16 +1,16 @@
 
-require("dotenv").config();
+require("dotenv").config();          //dotenv is a package that reads configuration values from a .env file.  - .config() tells dotenv to load those values.
 
-const express = require("express");
-const axios = require("axios");
+const express = require("express");      //loads the Express package
+const axios = require("axios");              //Axios is a library used to make HTTP requests.
+ 
+const app = express();                         //creates your Express application
+app.use(express.json({ limit: "1mb" }));      //reads incoming JSON request bodies and converts them into JavaScript objects. JSON body size to 1 megabyte
 
-const app = express();
-app.use(express.json({ limit: "1mb" }));
-
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;        //Use the port provided by the environment, otherwise use port 3000
 
 // Already processed users
-const processed = new Set();
+const processed = new Set();            //A Set stores unique values.
 
 // -------------------------------
 // SPRINKLR TOKEN MANAGEMENT
